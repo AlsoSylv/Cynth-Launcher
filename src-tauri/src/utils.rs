@@ -1,9 +1,9 @@
-use std::{path::Path, fs, sync::{Arc, atomic::{AtomicU32, Ordering}}};
+use std::{path::Path, fs, sync::{Arc, atomic::{AtomicU32, Ordering}}, env::consts::OS};
 
 use futures::StreamExt;
 use tauri::Window;
 
-use crate::{errors::Error, json::AssetMap};
+use crate::{errors::Error, json::{AssetMap, Library}};
 
 const ASSET_BASE_URL: &str = "https://resources.download.minecraft.net";
 
@@ -97,4 +97,91 @@ pub async fn write_assets(client: &reqwest::Client, index_url: &str, window: Win
     }
 
     Ok(())
+}
+
+pub async fn download_libraries(
+    init_libraries: &Vec<Library>,
+    client: &reqwest::Client,
+    window: Window
+) -> Result<Vec<String>, Error> {
+    let mut sha1 = sha1_smol::Sha1::new();
+
+    let mut requests = Vec::with_capacity(init_libraries.len());
+    let mut paths = Vec::with_capacity(init_libraries.len());
+    let mut needs_download = Vec::with_capacity(init_libraries.len());
+
+    for library in init_libraries {
+        let artifact = &library.downloads.artifact;
+        let jar = format!("./libraries/{}", &artifact.path);
+        if Path::new(&jar).exists() {
+            let existing_jar = fs::read(&jar).unwrap();
+            sha1.update(&existing_jar);
+            let result = sha1.digest().to_string();
+            if !result.eq(&artifact.sha1) {
+                panic!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            }
+
+            sha1.reset();
+
+            paths.push(jar);
+        } else if let Some(rules) = &library.rules {
+            for rule in rules {
+                let os_name = rule.os.name.clone();
+                if os_name.unwrap().eq(OS) {
+                    // let request = client.get(artifact.url.clone()).send();
+                    requests.push(artifact.url.clone());
+                    paths.push(jar.clone());
+                    needs_download.push(jar.clone());
+                }
+            }
+        } else {
+            requests.push(artifact.url.clone());
+            paths.push(jar.clone());
+            needs_download.push(jar);
+        }
+    }
+
+    let val = Arc::new(AtomicU32::new(0));
+
+    let fetches = futures::stream::iter(requests.iter().enumerate().map(|(pos, url)| {
+        let len = requests.len() as f32;
+        let paths = needs_download.clone();
+        let val = val.clone();
+        let client = client.clone();
+        let window = window.clone();
+        async move {
+            match client.get(url).send().await {
+                Ok(res) => {
+                    let libary_name = res
+                        .url()
+                        .path_segments()
+                        .and_then(|segment| segment.last())
+                        .unwrap()
+                        .to_owned();
+                    match res.bytes().await {
+                        Ok(buf) => {
+                            let jar_name = paths[pos].clone();
+                            let path = jar_name.strip_suffix(&libary_name).unwrap();
+                            let _ = tokio::fs::create_dir_all(path).await;
+                            let val = val.fetch_add(1, Ordering::Relaxed) as f32;
+                            window.emit("library_download_progress", &format!("{}", val / len)).unwrap();
+                            tokio::fs::write(jar_name, buf).await.map_err(Error::Io)
+                        }
+                        Err(err) => Err(Error::Request(err)),
+                    }
+                }
+                Err(err) => Err(Error::Request(err)),
+            }
+        }
+    }))
+    .buffer_unordered(16)
+    .collect::<Vec<Result<(), Error>>>();
+
+    let x = fetches.await;
+
+    for y in x {
+        y?
+    }
+
+    Ok(paths)
 }

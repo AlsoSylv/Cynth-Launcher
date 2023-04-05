@@ -6,7 +6,7 @@ mod json;
 mod utils;
 
 use errors::Error;
-use json::{VersionJson, LauncherJson};
+use json::{VersionJson, LauncherJson, Library};
 use tauri::{State, Manager, AppHandle, async_runtime};
 
 const VERSION_MANIFEST: &str = "https://launchermeta.mojang.com/mc/game/version_manifest.json";
@@ -25,7 +25,7 @@ impl LauncherState {
 fn main() {
     tauri::Builder::default()
         .manage(LauncherState::new())
-        .invoke_handler(tauri::generate_handler![launch_mc, get_versions_manifest, get_version_json, get_assets])
+        .invoke_handler(tauri::generate_handler![launch_mc, get_versions_manifest, get_version_json, get_assets, download_libraries])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -46,6 +46,12 @@ async fn get_version_json(state: State<'_, LauncherState>, url: &str) -> Result<
 async fn get_assets(app: AppHandle, state: State<'_, LauncherState>, index_url: String) -> Result<(), Error> {
     let window = app.get_window("main").unwrap();
     async_runtime::block_on(utils::write_assets(&state.client, &index_url, window))
+}
+
+#[tauri::command]
+async fn download_libraries(app: AppHandle, state: State<'_, LauncherState>, init_libraries: Vec<Library>) -> Result<Vec<String>, Error> {
+    let window = app.get_window("main").unwrap();
+    async_runtime::block_on(utils::download_libraries(&init_libraries, &state.client, window))
 }
 
 #[tauri::command]
