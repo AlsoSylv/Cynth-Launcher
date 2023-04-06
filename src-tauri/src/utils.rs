@@ -1,13 +1,28 @@
-use std::{path::Path, fs, sync::{Arc, atomic::{AtomicU32, Ordering}}, env::consts::OS};
+use std::{
+    env::consts::OS,
+    fs,
+    path::Path,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+};
 
 use futures::StreamExt;
 use tauri::Window;
 
-use crate::{errors::Error, json::{AssetMap, Library}};
+use crate::{
+    errors::Error,
+    json::{AssetMap, Library},
+};
 
 const ASSET_BASE_URL: &str = "https://resources.download.minecraft.net";
 
-pub async fn write_assets(client: &reqwest::Client, index_url: &str, window: Window) -> Result<(), Error> {
+pub async fn write_assets(
+    client: reqwest::Client,
+    index_url: String,
+    window: Window,
+) -> Result<(), Error> {
     let index_name = index_url.split('/').collect::<Vec<&str>>();
     let index_name = index_name.last().unwrap();
     let index_name = &format!("./assets/indexes/{}", index_name);
@@ -78,7 +93,9 @@ pub async fn write_assets(client: &reqwest::Client, index_url: &str, window: Win
                     Ok(buf) => {
                         let path = paths[pos].clone();
                         let val = val.fetch_add(1, Ordering::Relaxed) as f32;
-                        window.emit("asset_download_progress", &format!("{}", val / len)).unwrap();
+                        window
+                            .emit("asset_download_progress", &format!("{}", val / len))
+                            .unwrap();
                         tokio::fs::write(path, buf).await.map_err(Error::Io)
                     }
                     Err(err) => Err(Error::Request(err)),
@@ -88,6 +105,7 @@ pub async fn write_assets(client: &reqwest::Client, index_url: &str, window: Win
         }
     }))
     .buffer_unordered(16)
+    .boxed()
     .collect::<Vec<Result<(), Error>>>();
 
     let x = fetches.await;
@@ -102,7 +120,7 @@ pub async fn write_assets(client: &reqwest::Client, index_url: &str, window: Win
 pub async fn download_libraries(
     init_libraries: &Vec<Library>,
     client: &reqwest::Client,
-    window: Window
+    window: Window,
 ) -> Result<Vec<String>, Error> {
     let mut sha1 = sha1_smol::Sha1::new();
 
@@ -164,7 +182,9 @@ pub async fn download_libraries(
                             let path = jar_name.strip_suffix(&libary_name).unwrap();
                             let _ = tokio::fs::create_dir_all(path).await;
                             let val = val.fetch_add(1, Ordering::Relaxed) as f32;
-                            window.emit("library_download_progress", &format!("{}", val / len)).unwrap();
+                            window
+                                .emit("library_download_progress", &format!("{}", val / len))
+                                .unwrap();
                             tokio::fs::write(jar_name, buf).await.map_err(Error::Io)
                         }
                         Err(err) => Err(Error::Request(err)),
@@ -175,6 +195,7 @@ pub async fn download_libraries(
         }
     }))
     .buffer_unordered(16)
+    .boxed()
     .collect::<Vec<Result<(), Error>>>();
 
     let x = fetches.await;
